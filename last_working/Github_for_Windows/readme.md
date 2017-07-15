@@ -1,10 +1,13 @@
 [Origin]
+
 http://github-windows.s3.amazonaws.com/Application Files/GitHub_1_0_36_0/
 
 [Description]
+
 Github for Windows client version 1.0.36
 
 [Installation]
+
 Need .NET 4 framework and Powershell (optional)
 Extract zip file to your %programfiles%\Github or somewhere else
 run github.exe, it will configure tools and install to %APPDATA%
