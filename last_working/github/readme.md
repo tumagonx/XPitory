@@ -1,6 +1,6 @@
 [Origin]
 
-http://github-windows.s3.amazonaws.com/Application%20Files/GitHub_1_0_36_0/
+http://github-windows.s3.amazonaws.com/Application%20Files/GitHub_1_0_36_0/GitHub.exe.manifest
 
 
 [Description]
@@ -14,6 +14,7 @@ Need .NET 4 framework and Powershell (optional)
 Extract zip file to your %programfiles%\Github or somewhere else  
 run github.exe, it will configure tools and install to %APPDATA%  
 configure you account!
+create shortcut to github.exe
 
 Note:  
 github will create git-shell shortcut on your desktop, this doesn't work as it point to latest version online.  
