@@ -1,0 +1,102 @@
+--- src/about.c	Tue Aug 16 20:52:42 2011
++++ src/about.c	Sat Apr 05 11:02:18 2014
+@@ -32,11 +32,14 @@
+ 
+ #define GTK_RESPONSE_CREDITS 0
+ #define ZENITY_HELP_PATH ZENITY_DATADIR "/help/"
++#ifndef G_OS_WIN32
+ #define ZENITY_CLOTHES_PATH ZENITY_DATADIR "/clothes/"
+-
++#else
++#define ZENITY_CLOTHES_PATH g_build_filename(get_datadir_win32(),"clothes",NULL)
++#endif
+ #define ZENITY_CANVAS_X 400.0
+ #define ZENITY_CANVAS_Y 280.0
+ 
+ static GtkWidget *dialog;
+ 
+ static void zenity_about_display_help (GtkWidget *widget, gpointer data);
+@@ -147,7 +153,7 @@
+   size_t i;
+ 
+   for (i = 0; i < G_N_ELEMENTS (monk_clothes); i++) {
+-    pixbuf_path = g_strconcat (ZENITY_CLOTHES_PATH, monk_clothes[i].filename, NULL); 
++    pixbuf_path = g_build_filename (ZENITY_CLOTHES_PATH, monk_clothes[i].filename, NULL); 
+     pixbuf = gdk_pixbuf_new_from_file (pixbuf_path, NULL);
+ 
+     canvas_item = gnome_canvas_item_new (GNOME_CANVAS_GROUP (GNOME_CANVAS (canvas_board)->root),
+@@ -182,7 +188,7 @@
+ 
+   gtk_widget_modify_bg (GTK_WIDGET (canvas_board), GTK_STATE_NORMAL, &color);
+ 
+-  pixbuf = gdk_pixbuf_new_from_file (ZENITY_CLOTHES_PATH "monk.png", NULL);
++  pixbuf = gdk_pixbuf_new_from_file (g_build_filename(ZENITY_CLOTHES_PATH, "monk.png", NULL), NULL);
+ 
+   canvas_item = gnome_canvas_item_new (GNOME_CANVAS_GROUP (GNOME_CANVAS (canvas_board)->root),
+                                        GNOME_TYPE_CANVAS_PIXBUF,
+--- src/main.c	Tue Aug 16 20:52:42 2011
++++ src/main.c	Sat Apr 05 11:13:32 2014
+@@ -29,7 +29,9 @@
+ #include <stdlib.h>
+ #include <glib.h>
+ #include <gtk/gtk.h>
++#ifndef G_OS_WIN32
+ #include <langinfo.h>
++#endif
+ #ifdef HAVE_LOCALE_H
+ #include <locale.h>
+ #endif
+--- src/option.h	Tue Aug 16 20:52:42 2011
++++ src/option.h	Sat Apr 05 11:13:04 2014
+@@ -27,7 +27,9 @@
+ 
+ #include "zenity.h"
+ #include <glib.h>
++#ifndef G_OS_WIN32
+ #include <langinfo.h>
++#endif
+ #ifdef HAVE_LOCALE_H
+ #include <locale.h>
+ #endif
+--- src/util.c	Thu Mar 14 08:46:04 2013
++++ src/util.c	Sat Apr 05 10:58:34 2014
+@@ -435,3 +435,14 @@
+   }
+   return FALSE;
+ }
++
++gchar * 
++get_datadir_win32 (void)
++{
++    static gchar* root_path;
++    static gchar* datadir;
++    root_path = g_win32_get_package_installation_directory_of_module(NULL);
++    datadir = g_build_filename(root_path, "share", "zenity", NULL);
++    g_free(root_path);
++    return datadir;
++}
+--- src/util.h	Tue Aug 16 20:52:42 2011
++++ src/util.h	Sun Apr 27 10:02:28 2014
+@@ -8,9 +8,12 @@
+ 
+ #define ZENITY_UI_FILE_FULLPATH              ZENITY_DATADIR "/zenity.ui"
+ #define ZENITY_UI_FILE_RELATIVEPATH          "./zenity.ui"
+-
++#ifndef G_OS_WIN32
+ #define ZENITY_IMAGE_FULLPATH(filename)         (ZENITY_DATADIR "/" filename)
+-
++#else
++#define ZENITY_IMAGE_FULLPATH(filename) g_build_filename(get_datadir_win32(),"filename",NULL)
++#define ZENITY_UI_FILE_RELATIVEPATH g_build_filename(get_datadir_win32(),"zenity.ui",NULL)
++#endif
+ GtkBuilder*     zenity_util_load_ui_file                  (const gchar    *widget_root, ...) G_GNUC_NULL_TERMINATED;
+ gchar *         zenity_util_strip_newline                 (gchar          *string);
+ gboolean        zenity_util_fill_file_buffer              (GtkTextBuffer  *buffer, 
+@@ -33,5 +36,7 @@
+ gboolean        zenity_util_timeout_handle                (gpointer data);
+ 
+ G_END_DECLS
++
++gchar * get_datadir_win32 (void);
+ 
+ #endif /* UTIL_H */

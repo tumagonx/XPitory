@@ -1,0 +1,203 @@
+Configure with --without-x --enable-widec
+LIBS="-lgdi32 -lcomdlg32 -lws2_32" 
+CPPFLAGS="-DPDC_WIDE -DNCURSES_MOUSE_VERSION"
+
+--- dialog.h	Sun Aug 28 07:43:07 2016
++++ dialog.h	Tue Jul 25 13:10:59 2017
+@@ -64,6 +64,12 @@
+ #endif
+ #endif
+ 
++#ifdef PDCURSES
++#define NCURSES_VERSION 6
++#define NCURSES_VERSION_PATCH 20101020
++#define HAVE_WGET_WCH 1
++#endif
++
+ /* Solaris xpg4 renames these */
+ #ifndef KEY_MAX
+ #ifdef __KEY_MAX
+--- dlg_keys.c	Mon Aug 29 02:36:18 2016
++++ dlg_keys.c	Tue Jul 25 12:41:03 2017
+@@ -210,10 +210,13 @@
+     /*
+      * Ignore mouse clicks, since they are already encoded properly.
+      */
++#ifndef PDCURSES
++// somehow this break mouse...
+ #ifdef KEY_MOUSE
+     if (*fkey != 0 && curses_key == KEY_MOUSE) {
+ 	;
+     } else
++#endif
+ #endif
+ 	/*
+ 	 * Ignore resize events, since they are already encoded properly.
+--- makefile.in	Fri Apr 22 08:04:12 2016
++++ makefile.in	Tue Jul 25 13:18:54 2017
+@@ -128,7 +128,7 @@
+ # The library name $(LIB) is set at configure/make time, since it is used as a
+ # makefile target.  Ditto for $(PROG).
+ LIB		= @LIB_TARGET@
+-PROG		= @PACKAGE@$x
++PROG		= @PACKAGE@$(EXEEXT)
+ #
+ # Standard .c to .o compile line.
+ #
+@@ -200,9 +200,9 @@
+ @INTLDIR_MAKE@	@cd intl && $(MAKE) @cf_cv_makeflags@
+ 
+ dialog$o \
+-$(OBJECTS) : $(srcdir)/dialog.h $(srcdir)/dlg_keys.h dlg_config.h VERSION
++$(OBJECTS) : $(srcdir)/dialog.h $(srcdir)/dlg_keys.h dlg_config.h
+ 
+-$(PROG)$x : $(LIB) dialog$o @INTLDIR_MAKE@ @INTLLIBS@
++$(PROG)$(EXEEXT) : $(LIB) dialog$o @INTLDIR_MAKE@ @INTLLIBS@
+ 	$(LINK) -o $@ dialog$o -L. -l@PACKAGE@ $(LDFLAGS) $(LIBS)
+ 
+ clean	\
+@@ -247,10 +247,10 @@
+ 	@echo "made $@"
+ 
+ install-bin : $(PROG) $(BINDIR)
+-	$(INSTALL_PROGRAM) $(PROG) $(BINDIR)/$(ACTUAL_PROG)$x
++	$(INSTALL_PROGRAM) $(PROG) $(BINDIR)/$(ACTUAL_PROG)$(EXEEXT)
+ 
+ uninstall-bin :
+-	$(RM) $(BINDIR)/$(ACTUAL_PROG)$x
++	$(RM) $(BINDIR)/$(ACTUAL_PROG)$(EXEEXT)
+ 
+ install-man :: $(MAN1DIR)
+ 	@ echo "** installing $(ACTUAL_PROG).$(manext)"
+--- prgbox.c	Wed Jan 27 08:37:26 2016
++++ prgbox.c	Tue Jul 25 14:28:58 2017
+@@ -29,6 +29,12 @@
+     (void) sig;
+ }
+ 
++#ifdef _WIN32
++int pipe (int *fds)
++{
++  return _pipe(fds, 4096, _O_BINARY|_O_NOINHERIT);
++}
++#endif
+ /*
+  * Open a pipe which ties stderr and stdout together.
+  */
+@@ -102,8 +108,9 @@
+ {
+     int code;
+     FILE *fp;
++#ifndef _WIN32
+     void (*oldreaper) (int) = signal(SIGCHLD, reapchild);
+-
++#endif
+     fp = dlg_popen(command, "r");
+     if (fp == NULL)
+ 	dlg_exiterr("pipe open failed: %s", command);
+@@ -111,7 +118,8 @@
+     code = dlg_progressbox(title, cprompt, height, width, pauseopt, fp);
+ 
+     pclose(fp);
++#ifndef _WIN32
+     signal(SIGCHLD, oldreaper);
+-
++#endif
+     return code;
+ }
+--- ui_getc.c	Mon Mar 25 06:53:19 2013
++++ ui_getc.c	Tue Jul 25 14:33:59 2017
+@@ -63,6 +63,17 @@
+ # endif
+ #endif
+ 
++#ifdef _WIN32
++#include <ws2tcpip.h>
++#include <winsock2.h>
++#define SIGHUP 3 //CTRL_CLOSE_EVENT
++#define SIGQUIT SIGBREAK
++#define HAVE_WAITPID
++pid_t waitpid(pid_t pid, int *status, int options) {
++  return _cwait(status, pid, WAIT_CHILD);
++}
++#endif
++
+ void
+ dlg_add_callback(DIALOG_CALLBACK * p)
+ {
+@@ -324,9 +335,13 @@
+     int fd = fileno(fp);
+ 
+     if (fd >= 0) {
++#ifndef _WIN32
+ 	if (fcntl(fd, F_GETFL, 0) >= 0) {
++#endif
+ 	    code = TRUE;
++#ifndef _WIN32
+ 	}
++#endif
+     }
+     return code;
+ }
+--- util.c	Mon Apr 25 05:39:46 2016
++++ util.c	Tue Jul 25 12:07:43 2017
+@@ -253,6 +253,15 @@
+  * Open the terminal directly.  If one of stdin, stdout or stderr really points
+  * to a tty, use it.  Otherwise give up and open /dev/tty.
+  */
++
++#ifdef _WIN32
++char * ttyname(int fd) {
++
++	if (isatty(fd)) return "/dev/tty";
++	return NULL;
++}
++#endif
++
+ static int
+ open_terminal(char **result, int mode)
+ {
+@@ -391,9 +400,13 @@
+     if (!dialog_vars.keep_tite
+ 	&& (fileno(dialog_state.screen_output) != fileno(stdout)
+ 	    || isatty(fileno(dialog_state.screen_output)))
++#ifndef PDCURSES
+ 	&& key_mouse != 0	/* xterm and kindred */
+ 	&& isprivate(enter_ca_mode)
+-	&& isprivate(exit_ca_mode)) {
++	&& isprivate(exit_ca_mode)
++#endif
++	) 
++	{
+ 	/*
+ 	 * initscr() or newterm() already wrote enter_ca_mode as a side
+ 	 * effect of initializing the screen.  It would be nice to not even
+@@ -401,6 +414,7 @@
+ 	 * the terminfo description until those functions have been invoked.
+ 	 */
+ 	(void) refresh();
++#ifndef PDCURSES
+ 	(void) tputs(exit_ca_mode, 0, my_putc);
+ 	(void) tputs(clear_screen, 0, my_putc);
+ 	/*
+@@ -416,6 +430,7 @@
+ 	 */
+ 	enter_ca_mode = 0;
+ 	exit_ca_mode = 0;
++#endif
+     }
+ #endif
+ #ifdef HAVE_FLUSHINP
+@@ -618,6 +633,12 @@
+     if (left < 0)
+ 	left = 0;
+     return left;
++}
++
++// assum 1 length per char
++int wcwidth (wchar_t wc)
++{
++  return wc == 0 ? 0 : iswprint (wc) ? 1 : -1;
+ }
+ 
+ #ifdef USE_WIDE_CURSES
