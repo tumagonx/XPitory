@@ -1,0 +1,743 @@
+--- ogg123/buffer.c	Wed Mar 24 15:10:47 2010
++++ ogg123/buffer.c	Sun Jul 30 05:25:59 2017
+@@ -20,13 +20,20 @@
+ #endif
+ 
+ #include <sys/types.h>
+-#include <sys/wait.h>
++//#include <sys/wait.h>
+ #include <sys/time.h>
+ #include <string.h>
+ #include <fcntl.h>
+ #include <signal.h>
+ #include <unistd.h>
+ #include <stdio.h>
++#ifdef _WIN32
++typedef _sigset_t sigset_t;
++#define SIGCONT		16
++#define SIGTSTP 	18
++#define sigfillset(pset)     (*(pset) = (unsigned int)-1)
++#define sigaddset(pset, num) (*(pset) |= (1L<<(num)))
++#endif
+ 
+ #include "compat.h"
+ #include "buffer.h"
+--- ogg123/callbacks.c	Wed Jan 27 11:14:11 2010
++++ ogg123/callbacks.c	Sun Jul 30 05:25:59 2017
+@@ -196,7 +196,7 @@
+ 
+   va_start(ap, message);
+   switch (severity) {
+-  case ERROR:
++  case OERROR:
+     vstatus_error(message, ap);
+     break;
+   case WARNING:
+@@ -307,7 +307,7 @@
+ 
+ 
+   switch (severity) {
+-  case ERROR:
++  case OERROR:
+     buffer_append_action_at_end(buf, &status_error_action, sm_arg);
+     break;
+   case WARNING:
+--- ogg123/cfgfile_options.c	Wed Mar 24 15:21:30 2010
++++ ogg123/cfgfile_options.c	Sun Jul 30 05:29:11 2017
+@@ -370,7 +370,7 @@
+       return parse_syserr;
+   }
+ 
+-  file = fopen (filename, "r");
++  file = fopen (filename, "rb");
+   if (!file) {
+       parse_error (parse_syserr, 0, empty, empty);
+       free (line);
+--- ogg123/cmdline_options.c	Wed Mar 24 11:29:24 2010
++++ ogg123/cmdline_options.c	Sun Jul 30 20:53:40 2017
+@@ -307,8 +307,11 @@
+          " by the Xiph.Org Foundation (http://www.xiph.org/)\n\n"), PACKAGE, VERSION);
+ 
+   printf (_("Usage: ogg123 [options] file ...\n"
++#ifdef HAVE_CURL
+ 	    "Play Ogg audio files and network streams.\n\n"));
+- 
++#else
++	    "Play Ogg audio files.\n\n"));
++#endif
+   printf (_("Available codecs: "));
+ 
+ #ifdef HAVE_LIBFLAC
+@@ -317,6 +320,10 @@
+ 
+ #ifdef HAVE_LIBSPEEX
+   printf (_("Speex, "));
++#endif
++
++#ifdef HAVE_LIBOPUSFILE
++  printf (_("Opus, "));
+ #endif
+ 
+   printf (_("Ogg Vorbis.\n\n"));
+--- ogg123/file_transport.c	Wed Jan 27 11:14:11 2010
++++ ogg123/file_transport.c	Sun Jul 30 05:27:55 2017
+@@ -70,7 +70,7 @@
+     private->fp = stdin;
+     private->seekable = 0;
+   } else
+-    private->fp = fopen(source_string, "r");
++    private->fp = fopen(source_string, "rb");
+ 
+   if (private->fp == NULL) {
+     free(source->source_string);
+--- ogg123/format.c	Wed Jan 27 11:14:11 2010
++++ ogg123/format.c	Sun Jul 30 20:53:40 2017
+@@ -38,6 +38,11 @@
+ extern format_t speex_format;
+ #endif
+ 
++#ifdef HAVE_LIBOPUSFILE
++extern format_t opus_format;
++#endif
++
++
+ format_t *formats[] = { 
+ #ifdef HAVE_LIBFLAC
+ 			&flac_format,
+@@ -45,6 +50,9 @@
+ #endif
+ #ifdef HAVE_LIBSPEEX
+ 			&speex_format,
++#endif
++#ifdef HAVE_LIBOPUSFILE
++			&opus_format,
+ #endif
+ 			&oggvorbis_format, 
+ 			NULL };
+--- ogg123/format.h	Wed Jan 27 11:14:11 2010
++++ ogg123/format.h	Sun Jul 30 00:08:58 2017
+@@ -32,7 +32,7 @@
+ 
+ 
+ /* Severity constants */
+-enum { ERROR, WARNING, INFO };
++enum { OERROR, WARNING, INFO };
+ 
+ typedef struct decoder_callbacks_t {
+   void (* printf_error) (void *arg, int severity, char *message, ...);
+--- ogg123/http_transport.c	Wed Jan 27 11:14:11 2010
++++ ogg123/http_transport.c	Sun Jul 30 05:25:59 2017
+@@ -36,6 +36,14 @@
+ #include "callbacks.h"
+ #include "i18n.h"
+ 
++#ifdef _WIN32
++typedef _sigset_t sigset_t;
++#define SIGCONT		16
++#define SIGTSTP 	18
++#define sigfillset(pset)     (*(pset) = (unsigned int)-1)
++#define sigaddset(pset, num) (*(pset) |= (1L<<(num)))
++#endif
++
+ #define INPUT_BUFFER_SIZE 32768
+ 
+ extern stat_format_t *stat_format;  /* FIXME Bad hack!  Will fix after RC3! */
+--- ogg123/Makefile.am	Fri Jan 22 13:01:46 2010
++++ ogg123/Makefile.am	Sun Jul 30 20:53:40 2017
+@@ -9,6 +9,12 @@
+ else
+ speex_sources =
+ endif
++if HAVE_LIBOPUSFILE
++opusfile_sources = opus_format.c
++else
++opusfile_sources =
++endif
++
+ if HAVE_OV_READ_FILTER
+ vgfilter_sources = vgfilter.c vgfilter.h
+ else
+@@ -24,13 +30,14 @@
+ 
+ bin_PROGRAMS = ogg123
+ 
+-INCLUDES = @OGG_CFLAGS@ @VORBIS_CFLAGS@ @AO_CFLAGS@ @CURL_CFLAGS@ \
++INCLUDES = @OGG_CFLAGS@ @VORBIS_CFLAGS@ @OPUSFILE_CFLAGS@ @AO_CFLAGS@ @CURL_CFLAGS@ \
+            @PTHREAD_CFLAGS@ @SHARE_CFLAGS@ @I18N_CFLAGS@
+ 
+ ogg123_LDADD = @SHARE_LIBS@ \
+ 	       @VORBISFILE_LIBS@ @VORBIS_LIBS@ @OGG_LIBS@ @AO_LIBS@ \
+                @SOCKET_LIBS@ @LIBICONV@ @CURL_LIBS@ @PTHREAD_CFLAGS@ \
+-               @PTHREAD_LIBS@ @I18N_LIBS@ @FLAC_LIBS@ @SPEEX_LIBS@
++               @PTHREAD_LIBS@ @I18N_LIBS@ @FLAC_LIBS@ @SPEEX_LIBS@ \
++	       @OPUSFILE_LIBS@
+ 
+ ogg123_DEPENDENCIES = @SHARE_LIBS@
+ ogg123_SOURCES = audio.c buffer.c callbacks.c \
+@@ -42,7 +49,8 @@
+                 cfgfile_options.h cmdline_options.h \
+                 format.h ogg123.h playlist.h status.h \
+                 transport.h remote.h vorbis_comments.h \
+-                $(flac_sources) $(speex_sources) $(vgfilter_sources)
++                $(flac_sources) $(speex_sources) $(vgfilter_sources) \
++		$(opusfile_sources)
+ 
+ man_MANS = ogg123.1
+ doc_DATA = ogg123rc-example
+--- ogg123/ogg123.c	Wed Mar 24 15:11:11 2010
++++ ogg123/ogg123.c	Thu Aug 03 09:43:29 2017
+@@ -35,6 +35,51 @@
+ #include <sys/stat.h>
+ #include <unistd.h>
+ #include <locale.h>
++#ifdef _WIN32
++#include <windows.h>
++#include <process.h>
++typedef _sigset_t sigset_t;
++#define SIGKILL		7 // ctrl_shutdown
++#define SIGSTOP 	13
++#define SIGCONT		16
++#define SIGTSTP 	18
++#define srandom srand
++#define random rand
++int kill(pid_t pid, int sig)
++{
++  if (sig == SIGKILL || sig == SIGTERM)
++  {
++    HANDLE h;
++    DWORD dw;
++    BOOL terminated;
++    h = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, FALSE, (DWORD) pid);
++    if (!h)
++    {
++      //SetErrnoFromWinError(GetLastError());
++      return -1;
++    }
++    
++    if (GetExitCodeProcess(h, &dw) && dw != STILL_ACTIVE)
++    {
++      /* already killed */
++      CloseHandle(h);
++      return 0;
++    }
++    terminated = TerminateProcess(h, 0);
++    dw = GetLastError();
++    CloseHandle(h);
++    if (!terminated)
++    {
++      //SetErrnoFromWinError(dw);
++      return -1;      
++    }
++    else
++      return 0;
++  }
++  errno = EINVAL;
++  return -1;
++}
++#endif
+ 
+ #include "audio.h"
+ #include "buffer.h"
+@@ -395,7 +440,10 @@
+   int items;
+   struct stat stat_buf;
+   int i;
+-
++  
++  if (SetPriorityClass(GetCurrentProcess(),ABOVE_NORMAL_PRIORITY_CLASS))
++    SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_ABOVE_NORMAL);
++  
+   setlocale(LC_ALL, "");
+   bindtextdomain(PACKAGE, LOCALEDIR);
+   textdomain(PACKAGE);
+--- ogg123/oggvorbis_format.c	Wed Jan 27 12:29:29 2010
++++ ogg123/oggvorbis_format.c	Sun Jul 30 05:25:59 2017
+@@ -210,7 +210,7 @@
+     } else if (ret < 0) {
+ 
+       if (cb->printf_error != NULL)
+-	cb->printf_error(decoder->callback_arg, ERROR,
++	cb->printf_error(decoder->callback_arg, OERROR,
+ 			 _("=== Vorbis library reported a stream error.\n"));
+ 
+       /* EOF */
+--- ogg123/opus_format.c	Fri Aug 04 12:40:32 2017
++++ ogg123/opus_format.c	Sun Jul 30 21:04:14 2017
+@@ -0,0 +1,379 @@
++/********************************************************************
++ *                                                                  *
++ * THIS FILE IS PART OF THE OggVorbis SOFTWARE CODEC SOURCE CODE.   *
++ * USE, DISTRIBUTION AND REPRODUCTION OF THIS SOURCE IS GOVERNED BY *
++ * THE GNU PUBLIC LICENSE 2, WHICH IS INCLUDED WITH THIS SOURCE.    *
++ * PLEASE READ THESE TERMS BEFORE DISTRIBUTING.                     *
++ *                                                                  *
++ * THE Ogg123 SOURCE CODE IS (C) COPYRIGHT 2000-2003                *
++ * by Stan Seibert <volsung@xiph.org> AND OTHER CONTRIBUTORS        *
++ * http://www.xiph.org/                                             *
++ *                                                                  *
++ ********************************************************************
++
++ last mod: $Id: opus_format.c 16825 2010-01-27 04:14:08Z xiphmont $
++
++ ********************************************************************/
++
++#ifdef HAVE_CONFIG_H
++#include <config.h>
++#endif
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <ogg/ogg.h>
++#include <opus/opusfile.h>
++#include "transport.h"
++#include "format.h"
++#include "vorbis_comments.h"
++#include "utf8.h"
++#include "i18n.h"
++
++typedef struct opf_private_t {
++  OggOpusFile *of;
++  const OpusTags *ot;
++  const OpusHead *oh;
++  int current_section;
++
++  int bos; /* At beginning of logical bitstream */
++
++  decoder_stats_t stats;
++} opf_private_t;
++
++/* Forward declarations */
++format_t opus_format;
++OpusFileCallbacks opusfile_callbacks;
++
++
++void print_opus_stream_info (decoder_t *decoder);
++void print_opus_comments (const OpusTags *ot, decoder_callbacks_t *cb, 
++			    void *callback_arg);
++
++
++/* ----------------------------------------------------------- */
++
++
++int opf_can_decode (data_source_t *source)
++{
++  char buf[36];
++  int len;
++
++  len = source->transport->peek(source, buf, sizeof(char), 36);
++
++  if (len >= 32 && memcmp(buf, "OggS", 4) == 0
++      && memcmp(buf+28, "OpusHead", 8) == 0) /* 3 trailing spaces */
++    return 1;
++  else
++    return 0;
++}
++
++
++decoder_t* opf_init (data_source_t *source, ogg123_options_t *ogg123_opts,
++		     audio_format_t *audio_fmt,
++		     decoder_callbacks_t *callbacks, void *callback_arg)
++{
++  decoder_t *decoder;
++  opf_private_t *private;
++  int ret;
++
++
++  /* Allocate data source structures */
++  decoder = malloc(sizeof(decoder_t));
++  private = malloc(sizeof(opf_private_t));
++
++  if (decoder != NULL && private != NULL) {
++    decoder->source = source;
++    decoder->actual_fmt = decoder->request_fmt = *audio_fmt;
++    decoder->format = &opus_format;
++    decoder->callbacks = callbacks;
++    decoder->callback_arg = callback_arg;
++    decoder->private = private;
++
++    private->bos = 1;
++    private->current_section = -1;
++
++    private->stats.total_time = 0.0;
++    private->stats.current_time = 0.0;
++    private->stats.instant_bitrate = 0;
++    private->stats.avg_bitrate = 0;
++
++  } else {
++    fprintf(stderr, _("ERROR: Out of memory.\n"));
++    exit(1);
++  }
++
++  /* Initialize opusfile decoder */
++
++  private->of = op_open_callbacks (decoder, &opusfile_callbacks, NULL, 0, &ret);
++
++  if (private->of == NULL) {
++    free(private);
++/*    free(source);     nope.  caller frees. */
++    return NULL;
++  }
++
++  return decoder;
++}
++
++
++int opf_read (decoder_t *decoder, void *ptr, int nbytes, int *eos,
++	      audio_format_t *audio_fmt)
++{
++  opf_private_t *priv = decoder->private;
++  decoder_callbacks_t *cb = decoder->callbacks;
++  int bytes_read = 0;
++  int ret;
++  int old_section;
++
++  /* Read comments and audio info at the start of a logical bitstream */
++  if (priv->bos) {
++    priv->ot = op_tags(priv->of, -1);
++    priv->oh = op_head(priv->of, -1);
++
++    decoder->actual_fmt.channels = priv->oh->channel_count;
++    decoder->actual_fmt.rate = 48000;
++
++    switch(decoder->actual_fmt.channels){
++    case 1:
++      decoder->actual_fmt.matrix="M";
++      break;
++    case 2:
++      decoder->actual_fmt.matrix="L,R";
++      break;
++    case 3:
++      decoder->actual_fmt.matrix="L,C,R";
++      break;
++    case 4:
++      decoder->actual_fmt.matrix="L,R,BL,BR";
++      break;
++    case 5:
++      decoder->actual_fmt.matrix="L,C,R,BL,BR";
++      break;
++    case 6:
++      decoder->actual_fmt.matrix="L,C,R,BL,BR,LFE";
++      break;
++    case 7:
++      decoder->actual_fmt.matrix="L,C,R,SL,SR,BC,LFE";
++      break;
++    case 8:
++      decoder->actual_fmt.matrix="L,C,R,SL,SR,BL,BR,LFE";
++      break;
++    default:
++      decoder->actual_fmt.matrix=NULL;
++      break;
++    }
++
++
++    print_opus_stream_info(decoder);
++    print_opus_comments(priv->ot, cb, decoder->callback_arg);
++    priv->bos = 0;
++  }
++
++  *audio_fmt = decoder->actual_fmt;
++
++  /* Attempt to read as much audio as is requested */
++  while (nbytes >= audio_fmt->word_size * audio_fmt->channels) {
++
++    old_section = priv->current_section;
++    ret = op_read(priv->of, ptr, nbytes/2, NULL);
++
++    if (ret == 0) {
++
++      /* EOF */
++      *eos = 1;
++      break;
++
++    } else if (ret == OP_HOLE) {
++
++      if (cb->printf_error != NULL)
++	cb->printf_error(decoder->callback_arg, INFO,
++			   _("--- Hole in the stream; probably harmless\n"));
++
++    } else if (ret < 0) {
++
++      if (cb->printf_error != NULL)
++	cb->printf_error(decoder->callback_arg, OERROR,
++			 _("=== Vorbis library reported a stream error.\n"));
++
++      /* EOF */
++      *eos = 1;
++      break;
++    } else {
++
++      bytes_read += ret*2*audio_fmt->channels;
++      ptr = (void *)((unsigned char *)ptr + ret*2*audio_fmt->channels);
++      nbytes -= ret*2*audio_fmt->channels;
++
++      /* did we enter a new logical bitstream? */
++      if (old_section != priv->current_section && old_section != -1) {
++	
++	*eos = 1;
++	priv->bos = 1; /* Read new headers next time through */
++	break;
++      }
++    }
++
++  }
++
++  return bytes_read;
++}
++
++
++int opf_seek (decoder_t *decoder, double offset, int whence)
++{
++  opf_private_t *priv = decoder->private;
++  int ret;
++  int cur;
++  int samples = offset * 48000;
++
++  if (whence == DECODER_SEEK_CUR) {
++    cur = op_pcm_tell(priv->of);
++    if (cur >= 0)
++      samples += cur;
++    else
++      return 0;
++  }
++
++  ret = op_pcm_seek(priv->of, samples);
++  if (ret == 0)
++    return 1;
++  else
++    return 0;
++}
++
++
++decoder_stats_t *opf_statistics (decoder_t *decoder)
++{
++  opf_private_t *priv = decoder->private;
++  long instant_bitrate;
++  long avg_bitrate;
++
++  /* ov_time_tell() doesn't work on non-seekable streams, so we use
++     ov_pcm_tell()  */
++  priv->stats.total_time = (double) op_pcm_total(priv->of, -1) /
++    (double) decoder->actual_fmt.rate;
++  priv->stats.current_time = (double) op_pcm_tell(priv->of) / 
++    (double) decoder->actual_fmt.rate;
++
++  /* opusfile returns 0 when no bitrate change has occurred */
++  instant_bitrate = op_bitrate_instant(priv->of);
++  if (instant_bitrate > 0)
++    priv->stats.instant_bitrate = instant_bitrate;
++
++  avg_bitrate = op_bitrate(priv->of, priv->current_section);
++  /* Catch error case caused by non-seekable stream */
++  priv->stats.avg_bitrate = avg_bitrate > 0 ? avg_bitrate : 0;
++
++
++  return malloc_decoder_stats(&priv->stats);
++}
++
++
++void opf_cleanup (decoder_t *decoder)
++{
++  opf_private_t *priv = decoder->private;
++
++  op_free(priv->of);
++
++  free(decoder->private);
++  free(decoder);
++}
++
++
++format_t opus_format = {
++  "oggopus",
++  &opf_can_decode,
++  &opf_init,
++  &opf_read,
++  &opf_seek,
++  &opf_statistics,
++  &opf_cleanup,
++};
++
++
++/* ------------------- Opusfile Callbacks ----------------- */
++
++int opusfile_cb_read (void *stream, unsigned char *ptr, int nbytes)
++{
++  decoder_t *decoder = stream;
++
++  return decoder->source->transport->read(decoder->source, ptr, 1, nbytes);
++}
++
++int opusfile_cb_seek (void *arg, opus_int64 offset, int whence)
++{
++  decoder_t *decoder = arg;
++
++  return decoder->source->transport->seek(decoder->source, offset, whence);
++}
++
++int opusfile_cb_close (void *arg)
++{
++  return 1; /* Ignore close request so transport can be closed later */
++}
++
++opus_int64 opusfile_cb_tell (void *arg)
++{
++  decoder_t *decoder = arg;
++
++  return decoder->source->transport->tell(decoder->source);
++}
++
++
++OpusFileCallbacks opusfile_callbacks = {
++  &opusfile_cb_read,
++  &opusfile_cb_seek,
++  &opusfile_cb_tell,
++  &opusfile_cb_close
++};
++
++
++/* ------------------- Private functions -------------------- */
++
++
++void print_opus_stream_info (decoder_t *decoder)
++{
++  opf_private_t *priv = decoder->private;
++  decoder_callbacks_t *cb = decoder->callbacks;
++
++
++  if (cb == NULL || cb->printf_metadata == NULL)
++    return;
++
++  cb->printf_metadata(decoder->callback_arg, 2,
++		      _("Ogg Opus stream: %d channel, 48000 Hz"),
++		      priv->oh->channel_count);
++
++  cb->printf_metadata(decoder->callback_arg, 3,
++		      _("Vorbis format: Version %d"), 
++		      priv->oh->version);
++
++  cb->printf_metadata(decoder->callback_arg, 3,
++		      _("Encoded by: %s"), priv->ot->vendor);
++}
++
++void print_opus_comments (const OpusTags *ot, decoder_callbacks_t *cb, 
++			    void *callback_arg)
++{
++  int i;
++  char *temp = NULL;
++  int temp_len = 0;
++
++  for (i = 0; i < ot->comments; i++) {
++
++    /* Gotta null terminate these things */
++    if (temp_len < ot->comment_lengths[i] + 1) {
++      temp_len = ot->comment_lengths[i] + 1;
++      temp = realloc(temp, sizeof(char) * temp_len);
++    }
++
++    strncpy(temp, ot->user_comments[i], ot->comment_lengths[i]);
++    temp[ot->comment_lengths[i]] = '\0';
++
++    print_vorbis_comment(temp, cb, callback_arg);
++  }
++
++  free(temp);
++}
+--- ogg123/playlist.c	Wed Mar 24 11:28:47 2010
++++ ogg123/playlist.c	Sun Jul 30 22:54:08 2017
+@@ -35,7 +35,9 @@
+ #if !defined(NAME_MAX) && defined(MAXNAMLEN) 
+ #define NAME_MAX MAXNAMLEN
+ #endif
+-
++#ifdef _WIN32
++#define NAME_MAX PATH_MAX    
++#endif
+ playlist_element_t *playlist_element_create(char *filename)
+ {
+   playlist_element_t *element = (playlist_element_t *) 
+@@ -201,7 +203,11 @@
+ 
+       /* Build the new full pathname */
+       strcpy(nextfile, dirname);
++#ifdef _WIIN32
++      strcat(nextfile, "\\");
++#else
+       strcat(nextfile, "/");
++#endif
+       strcat(nextfile, entry->d_name);
+ 
+       if (stat(nextfile, &stat_buf) == 0) {
+@@ -245,7 +251,7 @@
+   if (strcmp(playlist_filename, "-") == 0)
+     fp = stdin;
+   else
+-    fp = fopen(playlist_filename, "r");
++    fp = fopen(playlist_filename, "rb");
+ 
+   if (fp == NULL)
+     return 0;
+--- ogg123/remote.c	Wed Mar 24 15:11:11 2010
++++ ogg123/remote.c	Sat Jul 29 22:45:30 2017
+@@ -255,8 +255,11 @@
+   char fname[MAXBUF+1];
+ 
+   /* Need to output line by line! */
++#ifdef _WIN32
++  setvbuf(stdout, NULL, _IONBF, 0);
++#else
+   setlinebuf(stdout);
+-
++#endif
+   /* Send a greeting */
+   send_msg("R ogg123 from " PACKAGE " " VERSION);
+ 
+--- ogg123/speex_format.c	Wed Jan 27 11:14:11 2010
++++ ogg123/speex_format.c	Sun Jul 30 05:25:59 2017
+@@ -472,11 +472,11 @@
+ 
+    *header = speex_packet_to_header((char*)op->packet, op->bytes);
+    if (!*header) {
+-           cb->printf_error(callback_arg, ERROR, _("Cannot read header"));
++           cb->printf_error(callback_arg, OERROR, _("Cannot read header"));
+      return NULL;
+    }
+    if ((*header)->mode >= SPEEX_NB_MODES || (*header)->mode < 0) {
+-     cb->printf_error(callback_arg, ERROR, 
++     cb->printf_error(callback_arg, OERROR, 
+ 		      _("Mode number %d does not (any longer) exist in this version"),
+ 	      (*header)->mode);
+      return NULL;
+@@ -486,11 +486,11 @@
+    mode = speex_mode_list[modeID];
+ 
+    if (mode->bitstream_version < (*header)->mode_bitstream_version) {
+-     cb->printf_error(callback_arg, ERROR, _("The file was encoded with a newer version of Speex.\n You need to upgrade in order to play it.\n"));
++     cb->printf_error(callback_arg, OERROR, _("The file was encoded with a newer version of Speex.\n You need to upgrade in order to play it.\n"));
+      return NULL;
+    }
+    if (mode->bitstream_version > (*header)->mode_bitstream_version) {
+-     cb->printf_error(callback_arg, ERROR, _("The file was encoded with an older version of Speex.\nYou would need to downgrade the version in order to play it."));
++     cb->printf_error(callback_arg, OERROR, _("The file was encoded with an older version of Speex.\nYou would need to downgrade the version in order to play it."));
+      return NULL;
+    }
+ 
+--- configure.ac	Fri Mar 26 14:07:07 2010
++++ configure.ac	Sun Jul 30 20:53:40 2017
+@@ -163,6 +163,16 @@
+ fi
+ AM_CONDITIONAL(HAVE_OV_READ_FILTER, test "x$have_ov_read_filter" = "xyes")
+ 
++if test "x$HAVE_PKG_CONFIG" = "xyes"
++then
++  PKG_CHECK_MODULES(OPUSFILE, opusfile >= 0.2, HAVE_LIBOPUSFILE=yes, HAVE_LIBOPUSFILE=no)
++  AC_SUBST(OPUSFILE_LIBS)
++  if test "x$HAVE_LIBOPUSFILE" = xyes; then
++    AC_DEFINE(HAVE_LIBOPUSFILE, 1, [Defined if we have libopusfile])
++  fi
++fi
++AM_CONDITIONAL(HAVE_LIBOPUSFILE, test "x$HAVE_LIBOPUSFILE" = "xyes")
++
+ 
+ SHARE_LIBS='$(top_builddir)/share/libutf8.a $(top_builddir)/share/libgetopt.a'
+ SHARE_CFLAGS='-I$(top_srcdir)/include'
