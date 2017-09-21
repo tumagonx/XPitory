@@ -1,0 +1,93 @@
+--- common.h	Tue Jul 07 01:21:28 2015
++++ common.h	Thu Sep 21 07:40:44 2017
+@@ -35,6 +35,11 @@
+ #include <float.h>
+ #include <math.h>
+ 
++#ifdef _WIN32
++#define random rand
++#define srandom srand
++#endif
++
+ extern int _debug_level;
+ 
+ #ifndef FALSE
+--- main.c	Tue Jul 07 01:21:28 2015
++++ main.c	Thu Sep 21 07:42:48 2017
+@@ -82,7 +82,7 @@
+ 
+ void version(char *prog) 
+ {
+-  ERROR("%s " VERSION "\n"
++  ERROR("%s 0.9.0\n"
+ 	  "Copyright (C) 2006,2007,2011,2013,2015 Bernd Breitenbach\n"
+ 	  "This is free software.  You may redistribute copies of it under the terms of\n"
+ 	  "the GNU General Public License <http://www.gnu.org/licenses/gpl.html>.\n"
+@@ -276,6 +276,42 @@
+   .copyright_text=NULL
+ };
+ 
++#ifdef _WIN32
++// from libevil
++char *strcasestr(const char *haystack, const char *needle)
++{
++   size_t length_needle;
++   size_t length_haystack;
++   size_t i;
++
++   if (!haystack || !needle)
++     return NULL;
++
++   length_needle = strlen(needle);
++   length_haystack = strlen(haystack) - length_needle + 1;
++
++   for (i = 0; i < length_haystack; i++)
++     {
++        size_t j;
++
++        for (j = 0; j < length_needle; j++)
++          {
++            unsigned char c1;
++            unsigned char c2;
++
++            c1 = haystack[i+j];
++            c2 = needle[j];
++            if (toupper(c1) != toupper(c2))
++              goto next;
++          }
++        return (char *) haystack + i;
++     next:
++        ;
++     }
++
++   return NULL;
++}
++#endif
+ static int convert_to_int(const char *value,int *ival)
+ {
+   char *end;
+@@ -496,7 +532,9 @@
+   char *dir,*optfile=NULL,*woptfile=NULL;
+   char buf[2048];
+   int sample=FALSE;
++#ifndef _WIN32
+   struct mallinfo minfo;
++#endif
+   int max_cells=INT_MAX;
+ 
+   DEBUG_LEVEL(9);
+@@ -1041,10 +1079,14 @@
+   INVOKE_WITH(plot,maze,&render_para);
+   
+   if (parameter.stats) {
++#ifndef _WIN32
+     minfo=mallinfo();
++#endif
+     printf("rendering time      :%5.5g\n",TIME_ELAPSED(last,clock()));
+     printf("total time used     :%5.5g\n",TIME_ELAPSED(last,clock()));
++#ifndef _WIN32
+     printf("memory used         :%d kb\n",minfo.arena/1024);
++#endif
+   }
+ 
+   if (woptfile!=NULL) {
