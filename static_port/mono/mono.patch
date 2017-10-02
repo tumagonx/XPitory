@@ -1,0 +1,119 @@
+--- ikvm-native/jni.c	Fri May 19 02:41:08 2017
++++ ikvm-native/jni.c	Mon Aug 21 15:35:22 2017
+@@ -486,7 +486,7 @@
+ 	0  // jlong JNICALL GetDirectBufferCapacity(jobject buf);
+ };
+ 
+-void** ikvm_GetJNIEnvVTable(void);
++JNIEXPORT void** JNICALL ikvm_GetJNIEnvVTable(void);
+ 
+ JNIEXPORT void** JNICALL ikvm_GetJNIEnvVTable(void)
+ {
+--- mono/metadata/file-mmap-windows.c	Fri May 19 02:41:08 2017
++++ mono/metadata/file-mmap-windows.c	Mon Aug 21 11:56:35 2017
+@@ -25,6 +25,17 @@
+ #define MAX_FLUSH_WAITS 15  // must be <=30
+ #define MAX_FLUSH_RETIRES_PER_WAIT 20
+ 
++#if _WIN32_WINNT < 0x0600
++#include <winternl.h>
++#include <ntstatus.h>
++  typedef struct _FILE_STANDARD_INFO {
++    LARGE_INTEGER AllocationSize;
++    LARGE_INTEGER EndOfFile;
++    DWORD NumberOfLinks;
++    BOOLEAN DeletePending;
++    BOOLEAN Directory;
++  } FILE_STANDARD_INFO,*PFILE_STANDARD_INFO;
++#endif
+ typedef struct {
+ 	void *address;
+ 	size_t length;
+@@ -155,10 +166,20 @@
+ 		}
+ 	} else {
+ 		FILE_STANDARD_INFO info;
++#if _WIN32_WINNT >= 0x0600
+ 		if (!GetFileInformationByHandleEx ((HANDLE) handle, FileStandardInfo, &info, sizeof (FILE_STANDARD_INFO))) {
+ 			*error = convert_win32_error (GetLastError (), COULD_NOT_OPEN);
+ 			return NULL;
+ 		}
++#else
++		NTSTATUS status;
++		IO_STATUS_BLOCK io;
++		status = NtQueryInformationFile( (HANDLE) handle, &io, &info, sizeof (FILE_STANDARD_INFO), FileStandardInformation );
++		if (status != STATUS_SUCCESS) {
++			*error = COULD_NOT_OPEN;
++			return NULL;
++		}
++#endif
+ 		if (*capacity == 0) {
+ 			if (info.EndOfFile.QuadPart == 0) {
+ 				*error = CAPACITY_SMALLER_THAN_FILE_SIZE;
+@@ -168,6 +189,7 @@
+ 			*error = CAPACITY_SMALLER_THAN_FILE_SIZE;
+ 			return NULL;
+ 		}
++
+ 	}
+ 
+ 	w_mapName = mapName ? mono_string_to_utf16 (mapName) : NULL;
+--- mono/utils/mono-os-mutex.h	Fri May 19 02:41:08 2017
++++ mono/utils/mono-os-mutex.h	Mon Aug 21 09:58:55 2017
+@@ -19,7 +19,7 @@
+ #include <string.h>
+ #include <time.h>
+ 
+-#if !defined(HOST_WIN32)
++#if !defined(HOST_WIN32) || (defined (__MINGW64_VERSION_MAJOR) && (_WIN32_WINNT < 0x0600))
+ #include <pthread.h>
+ #include <errno.h>
+ #else
+@@ -27,7 +27,7 @@
+ #include <windows.h>
+ #endif
+ 
+-#ifdef HAVE_SYS_TIME_H
++#if defined(HAVE_SYS_TIME_H) || (defined (__MINGW64_VERSION_MAJOR) && (_WIN32_WINNT < 0x0600))
+ #include <sys/time.h>
+ #endif
+ 
+@@ -38,7 +38,7 @@
+ #endif
+ 
+ 
+-#if !defined(HOST_WIN32)
++#if !defined(HOST_WIN32)  || (defined (__MINGW64_VERSION_MAJOR) && (_WIN32_WINNT < 0x0600))
+ 
+ typedef pthread_mutex_t mono_mutex_t;
+ typedef pthread_cond_t mono_cond_t;
+--- mono/utils/mono-time.c	Fri May 19 02:41:08 2017
++++ mono/utils/mono-time.c	Mon Aug 21 19:42:49 2017
+@@ -14,8 +14,10 @@
+ #endif
+ 
+ #include <utils/mono-time.h>
+-
+-
++#if _WIN32_WINNT < 0x0600
++#include <winternl.h>
++NTSYSAPI NTSTATUS  WINAPI NtQueryPerformanceCounter(PLARGE_INTEGER, PLARGE_INTEGER);
++#endif
+ #define MTICKS_PER_SEC (10 * 1000 * 1000)
+ 
+ gint64
+@@ -36,7 +38,14 @@
+ mono_msec_boottime (void)
+ {
+ 	/* GetTickCount () is reportedly monotonic */
++#if _WIN32_WINNT < 0x0600
++	LARGE_INTEGER counter, frequency;
++
++	NtQueryPerformanceCounter( &counter, &frequency );
++	return counter.QuadPart * 1000 / frequency.QuadPart;
++#else
+ 	return GetTickCount64 ();
++#endif
+ }
+ 
+ /* Returns the number of 100ns ticks from unspecified time: this should be monotonic */
