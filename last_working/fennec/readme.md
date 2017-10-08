@@ -6,6 +6,7 @@ https://ftp.mozilla.org/pub/mobile/releases/10.0.2/win32/en-US/fennec-10.0.2.en-
 [Description]
 
 Fennec 10.0.2 mobile for Windows, this is the last win32 build by mozilla.  
+It based on classic gecko (GRE 1.9)  
 
 Changes:  
 Added localisation pack from android version  
