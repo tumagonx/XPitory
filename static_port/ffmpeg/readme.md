@@ -45,10 +45,9 @@ tra-libs='-lstdc++ -lgomp' --cpu=pentium3
 License: launch ffmpeg.exe  
 
 
-
 [Installation]
 
-Copy to your program files, use `open with...` association to vipsdisp.exe if you wish  
+Copy to your program files, use `open with...` association to ffplay.exe if you wish  
 Copy your custom fonts into `share\fonts` sub-directory
 Copy your frei0r dlls into `frei0r` sub-directory  
 Copy your ladspa dlls into `ladspa` sub-directory  
