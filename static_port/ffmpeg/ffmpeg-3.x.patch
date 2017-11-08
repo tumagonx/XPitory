@@ -1,0 +1,103 @@
+--- libavcodec/libvorbisenc.c	Mon Jun 27 06:54:29 2016
++++ libavcodec/libvorbisenc.c	Wed Nov 08 10:22:20 2017
+@@ -91,7 +91,7 @@
+          * NOTE: we use the oggenc range of -1 to 10 for global_quality for
+          *       user convenience, but libvorbis uses -0.1 to 1.0.
+          */
+-        float q = avctx->global_quality / (float)FF_QP2LAMBDA;
++        float q = avctx->global_quality / (float)FF_QP2LAMBDA -2.0;
+         /* default to 3 if the user did not set quality or bitrate */
+         if (!(avctx->flags & AV_CODEC_FLAG_QSCALE))
+             q = 3.0;
+--- libavfilter/af_ladspa.c	Tue Sep 12 07:51:34 2017
++++ libavfilter/af_ladspa.c	Sun Nov 05 09:18:55 2017
+@@ -34,6 +34,19 @@
+ #include "avfilter.h"
+ #include "internal.h"
+ 
++#ifdef _WIN32
++#define WIN32_LEAN_AND_MEAN
++#define WIN32_EXTRA_LEAN
++#include <windows.h>
++static HMODULE GetThisExecHandle()
++{
++  MEMORY_BASIC_INFORMATION info;
++  size_t len = VirtualQueryEx(GetCurrentProcess(), (void*)GetThisExecHandle, &info, sizeof(info));
++  return len ? (HMODULE)info.AllocationBase : NULL;
++}
++static char ladspapath[MAX_PATH], *ls;
++#endif
++
+ typedef struct LADSPAContext {
+     const AVClass *class;
+     char *dl_name;
+@@ -428,6 +441,22 @@
+         }
+ 
+         av_free(paths);
++#ifdef _WIN32
++        if (GetModuleFileNameA(GetThisExecHandle(), ladspapath, sizeof(ladspapath) - 1))
++        {
++                for (ls = ladspapath; ls < ladspapath + strlen(ladspapath); ls++)
++                        if (*ls == '\\') *ls = '/';
++
++                if (ls = strrchr(ladspapath, '/'))
++                {
++                        *ls = 0;
++                        strncat(ladspapath, "\\ladspa\\",  sizeof(ladspapath) - 1 - strlen(ladspapath));
++                }
++        }
++        if (!s->dl_handle) {
++            s->dl_handle = try_load(ladspapath, s->dl_name);
++        }
++#endif
+         if (!s->dl_handle && (paths = av_asprintf("%s/.ladspa/lib", getenv("HOME")))) {
+             s->dl_handle = try_load(paths, s->dl_name);
+             av_free(paths);
+--- libavfilter/vf_frei0r.c	Tue Sep 12 07:51:34 2017
++++ libavfilter/vf_frei0r.c	Sun Nov 05 09:17:55 2017
+@@ -42,6 +42,19 @@
+ #include "internal.h"
+ #include "video.h"
+ 
++#ifdef _WIN32
++#define WIN32_LEAN_AND_MEAN
++#define WIN32_EXTRA_LEAN
++#include <windows.h>
++static HMODULE GetThisExecHandle()
++{
++  MEMORY_BASIC_INFORMATION info;
++  size_t len = VirtualQueryEx(GetCurrentProcess(), (void*)GetThisExecHandle, &info, sizeof(info));
++  return len ? (HMODULE)info.AllocationBase : NULL;
++}
++static char freipath[MAX_PATH], *ls;
++#endif
++
+ typedef f0r_instance_t (*f0r_construct_f)(unsigned int width, unsigned int height);
+ typedef void (*f0r_destruct_f)(f0r_instance_t instance);
+ typedef void (*f0r_deinit_f)(void);
+@@ -226,6 +239,24 @@
+         if (ret < 0)
+             return ret;
+     }
++#ifdef _WIN32
++    if (GetModuleFileNameA(GetThisExecHandle(), freipath, sizeof(freipath) - 1))
++    {
++            for (ls = freipath; ls < freipath + strlen(freipath); ls++)
++                    if (*ls == '\\') *ls = '/';
++
++            if (ls = strrchr(freipath, '/'))
++            {
++                    *ls = 0;
++                    strncat(freipath, "\\frei0r\\",  sizeof(freipath) - 1 - strlen(freipath));
++            }
++    }
++    if (!s->dl_handle) {
++        ret = load_path(ctx, &s->dl_handle, freipath, dl_name);
++        if (ret < 0)
++            return ret;
++    }
++#endif
+     if (!s->dl_handle && (path = getenv("HOME"))) {
+         char *prefix = av_asprintf("%s/.frei0r-1/lib/", path);
+         if (!prefix)
