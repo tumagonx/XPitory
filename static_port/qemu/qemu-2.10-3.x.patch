@@ -1,0 +1,530 @@
+--- block/iscsi.c	Tue Oct 03 04:23:41 2017
++++ block/iscsi.c	Sat Nov 11 08:15:33 2017
+@@ -24,10 +24,31 @@
+  */
+ 
+ #include "qemu/osdep.h"
++#if defined(_WIN32) && WINVER < 0x0600
++struct pollfd
++{
++    SOCKET fd;
++    short events;
++    short revents;
++};
+ 
++#define POLLIN      0x01
++#define POLLPRI     0x02
++#define POLLOUT     0x04
++#define POLLERR     0x08
++#define POLLHUP     0x10
++#define POLLNVAL    0x20
++
++#define POLLRDNORM POLLIN
++#define POLLWRNORM POLLOUT
++#define POLLRDBAND POLLPRI
++#define poll(x,y,z)        win32_poll(x,y,z)
++int     win32_poll(struct pollfd *fds, unsigned int nfsd, int timeout);
++#else
+ #include <poll.h>
+-#include <math.h>
+ #include <arpa/inet.h>
++#endif
++#include <math.h>
+ #include "qemu-common.h"
+ #include "qemu/config-file.h"
+ #include "qemu/error-report.h"
+--- block/nfs.c	Tue Oct 03 04:23:41 2017
++++ block/nfs.c	Sat Nov 11 09:11:54 2017
+@@ -23,8 +23,30 @@
+  */
+ 
+ #include "qemu/osdep.h"
++#if defined(_WIN32) && WINVER < 0x0600
++struct pollfd
++{
++    SOCKET fd;
++    short events;
++    short revents;
++};
+ 
++#define POLLIN      0x01
++#define POLLPRI     0x02
++#define POLLOUT     0x04
++#define POLLERR     0x08
++#define POLLHUP     0x10
++#define POLLNVAL    0x20
++
++#define POLLRDNORM POLLIN
++#define POLLWRNORM POLLOUT
++#define POLLRDBAND POLLPRI
++#define poll(x,y,z)        win32_poll(x,y,z)
++int     win32_poll(struct pollfd *fds, unsigned int nfsd, int timeout);
++typedef unsigned __int64 blkcnt_t;
++#else
+ #include <poll.h>
++#endif
+ #include "qemu-common.h"
+ #include "qemu/config-file.h"
+ #include "qemu/error-report.h"
+@@ -639,7 +661,11 @@
+     }
+ 
+     ret = DIV_ROUND_UP(st.st_size, BDRV_SECTOR_SIZE);
++#ifdef _WIN32
++    client->st_blocks = st.st_size/512;
++#else
+     client->st_blocks = st.st_blocks;
++#endif
+     client->has_zero_init = S_ISREG(st.st_mode);
+     *strp = '/';
+     goto out;
+@@ -760,8 +786,11 @@
+ 
+     nfs_set_events(client);
+     BDRV_POLL_WHILE(bs, !task.complete);
+-
++#ifdef _WIN32
++    return (task.ret < 0 ? task.ret : st.st_size);
++#else
+     return (task.ret < 0 ? task.ret : st.st_blocks * 512);
++#endif
+ }
+ 
+ static int nfs_file_truncate(BlockDriverState *bs, int64_t offset,
+@@ -813,7 +842,11 @@
+                        nfs_get_error(client->context));
+             return ret;
+         }
++#ifdef _WIN32
++        client->st_blocks = st.st_size/512;
++#else
+         client->st_blocks = st.st_blocks;
++#endif
+     }
+ 
+     return 0;
+--- include/qemu/thread-win32.h	Tue Oct 03 04:23:41 2017
++++ include/qemu/thread-win32.h	Sat Nov 11 09:46:13 2017
+@@ -4,14 +4,13 @@
+ #include <windows.h>
+ 
+ struct QemuMutex {
+-    SRWLOCK lock;
+-    bool initialized;
++    CRITICAL_SECTION lock;
++    LONG owner;
+ };
+ 
+ typedef struct QemuRecMutex QemuRecMutex;
+ struct QemuRecMutex {
+     CRITICAL_SECTION lock;
+-    bool initialized;
+ };
+ 
+ void qemu_rec_mutex_destroy(QemuRecMutex *mutex);
+@@ -20,19 +19,18 @@
+ void qemu_rec_mutex_unlock(QemuRecMutex *mutex);
+ 
+ struct QemuCond {
+-    CONDITION_VARIABLE var;
+-    bool initialized;
++    LONG waiters, target;
++    HANDLE sema;
++    HANDLE continue_event;
+ };
+ 
+ struct QemuSemaphore {
+     HANDLE sema;
+-    bool initialized;
+ };
+ 
+ struct QemuEvent {
+     int value;
+     HANDLE event;
+-    bool initialized;
+ };
+ 
+ typedef struct QemuThreadData QemuThreadData;
+@@ -44,4 +42,4 @@
+ /* Only valid for joinable threads.  */
+ HANDLE qemu_thread_get_handle(QemuThread *thread);
+ 
+-#endif
++#endif
+\ No newline at end of file
+--- util/qemu-thread-win32.c	Tue Oct 03 04:23:41 2017
++++ util/qemu-thread-win32.c	Sat Nov 11 09:46:19 2017
+@@ -10,16 +10,10 @@
+  * See the COPYING file in the top-level directory.
+  *
+  */
+-
+-#ifndef _WIN32_WINNT
+-#define _WIN32_WINNT 0x0600
+-#endif
+-
+ #include "qemu/osdep.h"
+ #include "qemu-common.h"
+ #include "qemu/thread.h"
+ #include "qemu/notify.h"
+-#include "trace.h"
+ #include <process.h>
+ 
+ static bool name_threads;
+@@ -45,135 +39,213 @@
+ 
+ void qemu_mutex_init(QemuMutex *mutex)
+ {
+-    InitializeSRWLock(&mutex->lock);
+-    mutex->initialized = true;
++    mutex->owner = 0;
++    InitializeCriticalSection(&mutex->lock);
+ }
+ 
+ void qemu_mutex_destroy(QemuMutex *mutex)
+ {
+-    assert(mutex->initialized);
+-    mutex->initialized = false;
+-    InitializeSRWLock(&mutex->lock);
++    assert(mutex->owner == 0);
++    DeleteCriticalSection(&mutex->lock);
+ }
+ 
+ void qemu_mutex_lock(QemuMutex *mutex)
+ {
+-    assert(mutex->initialized);
+-    AcquireSRWLockExclusive(&mutex->lock);
+-    trace_qemu_mutex_locked(mutex);
++    EnterCriticalSection(&mutex->lock);
++
++    /* Win32 CRITICAL_SECTIONs are recursive.  Assert that we're not
++     * using them as such.
++     */
++    assert(mutex->owner == 0);
++    mutex->owner = GetCurrentThreadId();
+ }
+ 
+ int qemu_mutex_trylock(QemuMutex *mutex)
+ {
+     int owned;
+ 
+-    assert(mutex->initialized);
+-    owned = TryAcquireSRWLockExclusive(&mutex->lock);
++    owned = TryEnterCriticalSection(&mutex->lock);
+     if (owned) {
+-        trace_qemu_mutex_locked(mutex);
+-        return 0;
++        assert(mutex->owner == 0);
++        mutex->owner = GetCurrentThreadId();
+     }
+-    return -EBUSY;
++    return !owned;
+ }
+ 
+ void qemu_mutex_unlock(QemuMutex *mutex)
+ {
+-    assert(mutex->initialized);
+-    trace_qemu_mutex_unlocked(mutex);
+-    ReleaseSRWLockExclusive(&mutex->lock);
++    assert(mutex->owner == GetCurrentThreadId());
++    mutex->owner = 0;
++    LeaveCriticalSection(&mutex->lock);
+ }
+ 
+ void qemu_rec_mutex_init(QemuRecMutex *mutex)
+ {
+     InitializeCriticalSection(&mutex->lock);
+-    mutex->initialized = true;
+ }
+ 
+ void qemu_rec_mutex_destroy(QemuRecMutex *mutex)
+ {
+-    assert(mutex->initialized);
+-    mutex->initialized = false;
+     DeleteCriticalSection(&mutex->lock);
+ }
+ 
+ void qemu_rec_mutex_lock(QemuRecMutex *mutex)
+ {
+-    assert(mutex->initialized);
+     EnterCriticalSection(&mutex->lock);
+ }
+ 
+ int qemu_rec_mutex_trylock(QemuRecMutex *mutex)
+ {
+-    assert(mutex->initialized);
+     return !TryEnterCriticalSection(&mutex->lock);
+ }
+ 
+ void qemu_rec_mutex_unlock(QemuRecMutex *mutex)
+ {
+-    assert(mutex->initialized);
+     LeaveCriticalSection(&mutex->lock);
+ }
+ 
+ void qemu_cond_init(QemuCond *cond)
+ {
+     memset(cond, 0, sizeof(*cond));
+-    InitializeConditionVariable(&cond->var);
+-    cond->initialized = true;
++
++    cond->sema = CreateSemaphore(NULL, 0, LONG_MAX, NULL);
++    if (!cond->sema) {
++        error_exit(GetLastError(), __func__);
++    }
++    cond->continue_event = CreateEvent(NULL,    /* security */
++                                       FALSE,   /* auto-reset */
++                                       FALSE,   /* not signaled */
++                                       NULL);   /* name */
++    if (!cond->continue_event) {
++        error_exit(GetLastError(), __func__);
++    }
+ }
+ 
+ void qemu_cond_destroy(QemuCond *cond)
+ {
+-    assert(cond->initialized);
+-    cond->initialized = false;
+-    InitializeConditionVariable(&cond->var);
++    BOOL result;
++    result = CloseHandle(cond->continue_event);
++    if (!result) {
++        error_exit(GetLastError(), __func__);
++    }
++    cond->continue_event = 0;
++    result = CloseHandle(cond->sema);
++    if (!result) {
++        error_exit(GetLastError(), __func__);
++    }
++    cond->sema = 0;
+ }
+ 
+ void qemu_cond_signal(QemuCond *cond)
+ {
+-    assert(cond->initialized);
+-    WakeConditionVariable(&cond->var);
++    DWORD result;
++
++    /*
++     * Signal only when there are waiters.  cond->waiters is
++     * incremented by pthread_cond_wait under the external lock,
++     * so we are safe about that.
++     */
++    if (cond->waiters == 0) {
++        return;
++    }
++
++    /*
++     * Waiting threads decrement it outside the external lock, but
++     * only if another thread is executing pthread_cond_broadcast and
++     * has the mutex.  So, it also cannot be decremented concurrently
++     * with this particular access.
++     */
++    cond->target = cond->waiters - 1;
++    result = SignalObjectAndWait(cond->sema, cond->continue_event,
++                                 INFINITE, FALSE);
++    if (result == WAIT_ABANDONED || result == WAIT_FAILED) {
++        error_exit(GetLastError(), __func__);
++    }
+ }
+ 
+ void qemu_cond_broadcast(QemuCond *cond)
+ {
+-    assert(cond->initialized);
+-    WakeAllConditionVariable(&cond->var);
++    BOOLEAN result;
++    /*
++     * As in pthread_cond_signal, access to cond->waiters and
++     * cond->target is locked via the external mutex.
++     */
++    if (cond->waiters == 0) {
++        return;
++    }
++
++    cond->target = 0;
++    result = ReleaseSemaphore(cond->sema, cond->waiters, NULL);
++    if (!result) {
++        error_exit(GetLastError(), __func__);
++    }
++
++    /*
++     * At this point all waiters continue. Each one takes its
++     * slice of the semaphore. Now it's our turn to wait: Since
++     * the external mutex is held, no thread can leave cond_wait,
++     * yet. For this reason, we can be sure that no thread gets
++     * a chance to eat *more* than one slice. OTOH, it means
++     * that the last waiter must send us a wake-up.
++     */
++    WaitForSingleObject(cond->continue_event, INFINITE);
+ }
+ 
+ void qemu_cond_wait(QemuCond *cond, QemuMutex *mutex)
+ {
+-    assert(cond->initialized);
+-    trace_qemu_mutex_unlocked(mutex);
+-    SleepConditionVariableSRW(&cond->var, &mutex->lock, INFINITE, 0);
+-    trace_qemu_mutex_locked(mutex);
++    /*
++     * This access is protected under the mutex.
++     */
++    cond->waiters++;
++
++    /*
++     * Unlock external mutex and wait for signal.
++     * NOTE: we've held mutex locked long enough to increment
++     * waiters count above, so there's no problem with
++     * leaving mutex unlocked before we wait on semaphore.
++     */
++    qemu_mutex_unlock(mutex);
++    WaitForSingleObject(cond->sema, INFINITE);
++
++    /* Now waiters must rendez-vous with the signaling thread and
++     * let it continue.  For cond_broadcast this has heavy contention
++     * and triggers thundering herd.  So goes life.
++     *
++     * Decrease waiters count.  The mutex is not taken, so we have
++     * to do this atomically.
++     *
++     * All waiters contend for the mutex at the end of this function
++     * until the signaling thread relinquishes it.  To ensure
++     * each waiter consumes exactly one slice of the semaphore,
++     * the signaling thread stops until it is told by the last
++     * waiter that it can go on.
++     */
++    if (InterlockedDecrement(&cond->waiters) == cond->target) {
++        SetEvent(cond->continue_event);
++    }
++
++    qemu_mutex_lock(mutex);
+ }
+ 
+ void qemu_sem_init(QemuSemaphore *sem, int init)
+ {
+     /* Manual reset.  */
+     sem->sema = CreateSemaphore(NULL, init, LONG_MAX, NULL);
+-    sem->initialized = true;
+ }
+ 
+ void qemu_sem_destroy(QemuSemaphore *sem)
+ {
+-    assert(sem->initialized);
+-    sem->initialized = false;
+     CloseHandle(sem->sema);
+ }
+ 
+ void qemu_sem_post(QemuSemaphore *sem)
+ {
+-    assert(sem->initialized);
+     ReleaseSemaphore(sem->sema, 1, NULL);
+ }
+ 
+ int qemu_sem_timedwait(QemuSemaphore *sem, int ms)
+ {
+-    int rc;
+-
+-    assert(sem->initialized);
+-    rc = WaitForSingleObject(sem->sema, ms);
++    int rc = WaitForSingleObject(sem->sema, ms);
+     if (rc == WAIT_OBJECT_0) {
+         return 0;
+     }
+@@ -185,7 +257,6 @@
+ 
+ void qemu_sem_wait(QemuSemaphore *sem)
+ {
+-    assert(sem->initialized);
+     if (WaitForSingleObject(sem->sema, INFINITE) != WAIT_OBJECT_0) {
+         error_exit(GetLastError(), __func__);
+     }
+@@ -198,7 +269,7 @@
+  *
+  * Valid transitions:
+  * - free->set, when setting the event
+- * - busy->set, when setting the event, followed by SetEvent
++ * - busy->set, when setting the event, followed by futex_wake
+  * - set->free, when resetting the event
+  * - free->busy, when waiting
+  *
+@@ -219,19 +290,15 @@
+     /* Manual reset.  */
+     ev->event = CreateEvent(NULL, TRUE, TRUE, NULL);
+     ev->value = (init ? EV_SET : EV_FREE);
+-    ev->initialized = true;
+ }
+ 
+ void qemu_event_destroy(QemuEvent *ev)
+ {
+-    assert(ev->initialized);
+-    ev->initialized = false;
+     CloseHandle(ev->event);
+ }
+ 
+ void qemu_event_set(QemuEvent *ev)
+ {
+-    assert(ev->initialized);
+     /* qemu_event_set has release semantics, but because it *loads*
+      * ev->value we need a full memory barrier here.
+      */
+@@ -248,7 +315,6 @@
+ {
+     unsigned value;
+ 
+-    assert(ev->initialized);
+     value = atomic_read(&ev->value);
+     smp_mb_acquire();
+     if (value == EV_SET) {
+@@ -263,7 +329,6 @@
+ {
+     unsigned value;
+ 
+-    assert(ev->initialized);
+     value = atomic_read(&ev->value);
+     smp_mb_acquire();
+     if (value != EV_SET) {
+@@ -432,8 +497,8 @@
+ 
+     EnterCriticalSection(&data->cs);
+     if (!data->exited) {
+-        handle = OpenThread(SYNCHRONIZE | THREAD_SUSPEND_RESUME |
+-                            THREAD_SET_CONTEXT, FALSE, thread->tid);
++        handle = OpenThread(SYNCHRONIZE | THREAD_SUSPEND_RESUME, FALSE,
++                            thread->tid);
+     } else {
+         handle = NULL;
+     }
+@@ -444,4 +509,4 @@
+ bool qemu_thread_is_self(QemuThread *thread)
+ {
+     return GetCurrentThreadId() == thread->tid;
+-}
++}
+\ No newline at end of file
+--- configure	Tue Oct 03 04:23:41 2017
++++ configure	Sat Nov 11 16:05:08 2017
+@@ -3093,7 +3093,7 @@
+ # BrlAPI probe
+ 
+ if test "$brlapi" != "no" ; then
+-  brlapi_libs="-lbrlapi"
++  brlapi_libs="-lbrlapi $LIBS"
+   cat > $TMPC << EOF
+ #include <brlapi.h>
+ #include <stddef.h>
+@@ -3115,7 +3115,7 @@
+ if test "$curses" != "no" ; then
+   if test "$mingw32" = "yes" ; then
+     curses_inc_list="$($pkg_config --cflags ncurses 2>/dev/null):"
+-    curses_lib_list="$($pkg_config --libs ncurses 2>/dev/null):-lpdcurses"
++    curses_lib_list="$($pkg_config --libs ncurses 2>/dev/null):-lpdcurses -lgdi32 -lcomdlg32"
+   else
+     curses_inc_list="$($pkg_config --cflags ncursesw 2>/dev/null):-I/usr/include/ncursesw:"
+     curses_lib_list="$($pkg_config --libs ncursesw 2>/dev/null):-lncursesw:-lcursesw"
+@@ -4687,7 +4687,7 @@
+ int main(int argc, char *argv[]) { return bar(argv[0]); }
+ EOF
+   if compile_object "" ; then
+-    avx2_opt="yes"
++    avx2_opt="no"
+   fi
+ fi
+ 
