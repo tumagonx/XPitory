@@ -18,7 +18,7 @@ License: GPL
 [Installation]
 
 Extract to your program files, make shortcut if you wish  
-For HAXM you may try http://download-software.intel.com/sites/landingpage/android/extra_intel_haxm-windows_r02.zip  
+For HAXM you may try http://software.intel.com/sites/default/files/haxm-windows_r05.zip  
 Console-less executables are omitted, to generate it run makeqemuw.bat  
 
 
